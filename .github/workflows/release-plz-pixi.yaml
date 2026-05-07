@@ -1,0 +1,74 @@
+name: Release (release-plz + Pixi)
+
+on:
+  workflow_call:
+    inputs:
+      config-file:
+        type: string
+        default: "release-plz.toml"
+      lockfile-command:
+        type: string
+        default: "pixi install"
+      lockfile-pattern:
+        type: string
+        default: "Cargo.lock pixi.lock"
+      commit-message:
+        type: string
+        default: "chore: update lockfiles"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5.128
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          command: release
+          config: ${{ inputs.config-file }}
+
+  release-pr:
+    needs: release
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.release.outputs.prs_created == 'true' && fromJSON(steps.release.outputs.pr).number || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5.128
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          command: release-pr
+          config: ${{ inputs.config-file }}
+
+  update-lockfiles:
+    needs: release-pr
+    if: needs.release-pr.outputs.pr_number != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checkout ${{ needs.release-pr.outputs.pr_number }}
+      - uses: prefix-dev/setup-pixi@v0.8.8
+        with:
+          locked: false
+      - name: Refresh lockfiles
+        run: ${{ inputs.lockfile-command }}
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: ${{ inputs.commit-message }}
+          file_pattern: ${{ inputs.lockfile-pattern }}
